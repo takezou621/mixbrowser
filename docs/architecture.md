@@ -26,7 +26,7 @@ flowchart LR
     SV[SessionVault<br/>(OSキーチェーン連携)]
     SC[Scheduler]
     AO[AgentOrchestrator<br/>claude-code / glm / muse(stub)]
-    BTS[BrowserToolServer<br/>(MCP: stdio / HTTP)]
+    BTS[BrowserToolServer<br/>(MCP: Streamable HTTP / 127.0.0.1 + Bearer)]
     XD[XDriver<br/>(CDP via webContents.debugger)]
     DB[(SQLite)]
   end
@@ -45,7 +45,7 @@ flowchart LR
 - **SessionVault**: セッション cookie 等の秘密情報を OS キーチェーン(macOS Keychain / Windows DPAPI / libsecret)に保存
 - **Scheduler**: 予約時刻の管理と実行トリガ。キューは SQLite に永続化し、クラッシュ後も復帰
 - **AgentOrchestrator**: エージェントランタイムの差異(Claude Code CLI / GLM function-calling ループ)を吸収し、同一のツール群を見せる
-- **BrowserToolServer**: MCP サーバ。Claude Code には stdio で、その他のランタイムには HTTP で提供
+- **BrowserToolServer**: MCP サーバ(Streamable HTTP)。**Electron Main プロセス内**で `127.0.0.1` 限定 + Bearer 認証で待ち受け、Claude Code は起動時に自動生成される `mixbrowser.mcp.json`(HTTP トランスポート設定)経由で接続する。**stdio サーバを Claude Code 側に別プロセス起動する構成は採らない**(ブラウザ操作ツールは Main の XDriver を直接呼ぶため、別プロセス→Main の転送経路が不要になる)
 - **XDriver**: `webContents.debugger` で CDP アタッチし、観測(Runtime.evaluate / アクセシビリティツリー)と操作(Input.dispatchKeyEvent / Input.dispatchMouseEvent)を行う
 
 ### 将来ディレクトリ構成(案)
@@ -69,6 +69,7 @@ docs/
 
 - バッチ: `claude -p "<指示>" --mcp-config mixbrowser.mcp.json --allowedTools "mcp__mixbrowser__*"`
 - 対話: AI パネルから Claude Code(Agent SDK / サブプロセス)を起動し、同 MCP サーバに接続
+- 接続方式: `mixbrowser.mcp.json` は HTTP トランスポート(`"type": "http"`)の設定で、Main プロセスが自動生成する。stdio サーバを別プロセスで起動して Main へ転送する構成は採らない
 - 認証: ユーザー自身の Claude Code 環境(サブスク / API キー)をそのまま利用。本アプリは認証を代理しない
 
 ### 3.2 GLM
@@ -109,6 +110,10 @@ interface ContentGenerator {
 | `draft_save` / `draft_list` | account, text, mediaPaths, status? | low | 下書きキュー操作 |
 | `schedule_create` / `schedule_list` / `schedule_cancel` | draftId, runAt | low | 予約管理 |
 | `action_log_write` | level, message, meta | low | 監査ログ追記 |
+
+> **汎用ツールの制約(M2 導入時)。** `browser_click` / `browser_type` / `browser_key` 等の汎用ツールで X の**送信系要素**(投稿ボタン等)を操作することを禁止し、ツール層でブロックする。投稿の実行は `x_create_post`(承認ゲート + ドライランを通る承認済み経路)に限定する。M1 は汎用ツールを持たないため影響なし。
+>
+> また `browser_file_upload`(M2 導入時)は、**ユーザーが明示許可したファイル**のみ、**意図したページ要素**にのみ渡せるよう認可する。ページの JavaScript は添付ファイルの内容を読み取れるため、秘密性の高いファイル(鍵・認証情報等)は常に除外対象とする。
 
 ## 5. データモデル(SQLite)
 
@@ -157,8 +162,8 @@ interface ContentGenerator {
 - **保存**: セッション cookie 等は OS キーチェーン。DB 本体は SQLCipher による暗号化オプションを用意
 - **分離**: プロファイルごとに Electron partition を分離。アカウント間で cookie を共有しない
 - **エージェント権限**: ツールホワイトリスト。高リスクツール(`x_create_post` 等)は承認ゲートを必須化
-- **プロンプトインジェクション対策**: X のタイムライン等「ページ内テキスト」はエージェントへの指示ではなくデータとして注入する。ページ内容由来の指示で高リスクツールを実行できないよう、出所タグを付与
-- **ネットワーク**: 外部送信はユーザー設定の LLM エンドポイントのみ。テレメトリなし
+- **プロンプトインジェクション対策**: X のタイムライン等「ページ内テキスト」はエージェントへの指示ではなくデータとして注入し、出所をタグ付けする。**ただしタグは補助的な対策であり、モデルの誤従事を完全には防げない**(タグ付きデータ由来でも高リスクツールの呼び出し自体は生成され得る)。最終的な保証は (1) 承認ゲートによる人間確認、(2) ツール層の制限(汎用ツールからの送信遮断・高リスク操作の人間承認必須)によって行う
+- **ネットワーク**: アプリ自身が任意に追加送信するデータはない(テレメトリ等なし)。通信先は (a) 内蔵ブラウザが閲覧するサイト(x.com 等の通常ブラウジング相当)(b) ユーザー設定の LLM エンドポイント の 2 系統に限られ、エージェントへ渡すデータも投稿運用に必要な範囲(本文・下書き・スクリーンショット)に留める
 
 ## 8. テスト方針
 

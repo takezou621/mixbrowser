@@ -97,7 +97,7 @@ export async function startMcpServer(deps: McpDeps): Promise<McpHandle> {
     {
       title: "下書きの登録(承認待ち)",
       description:
-        "X 投稿の下書きを作成し、承認待ち(pending_approval)としてキューに登録する。text は 280 文字以内。ユーザーが UI で承認した後にのみ投稿される",
+        "X 投稿の下書きを作成し、承認待ち(pending_approval)としてキューに登録する。text は X の重み付き文字数で 280 以内(日本語は約140字)。ユーザーが UI で承認した後にのみ投稿される",
       inputSchema: {
         text: z.string().min(1).max(280).describe("投稿本文(280文字以内)"),
         screenshotPath: z.string().optional().describe("ドライランのプレビュー画像パス(任意)"),

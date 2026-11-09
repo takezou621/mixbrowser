@@ -67,8 +67,8 @@ function createWindow(): void {
       partition: "persist:x-main",
       contextIsolation: true,
       nodeIntegration: false,
-      // スモークモードでは capturePage のため最小サイズで表示する(通常モードは従来どおり)
-      offscreen: false,
+      // スモークモード(非表示ウィンドウ)でも capturePage できるようスロットリングを無効化
+      backgroundThrottling: !isSmoke,
     },
   });
   win.contentView.addChildView(view);
@@ -186,6 +186,20 @@ function registerIpc(): void {
 
 app.whenReady().then(async () => {
   store = new Store(app.getPath("userData"));
+  // 前回終了時に実行中だったドラフトの救済(spec FR-4.4):
+  // X への送信結果は不明のため自動再送はしない(二重投稿防止)。ユーザー確認後に再承認する
+  for (const d of store.listDrafts("posting")) {
+    store.updateDraft(d.id, {
+      status: "failed",
+      error: "アプリ終了時に実行中だったため結果を判定できません。プロフィールで投稿の有無を確認してください",
+    });
+    store.addLog({
+      kind: "recover",
+      level: "warn",
+      message: "posting 状態のドラフトを結果不明として failed に戻しました(自動再送なし)",
+      draftId: d.id,
+    });
+  }
   engine = new Engine(store, () => view ?? undefined, screenshotDir(), notify);
   engine.start();
   mcp = await startMcpServer({

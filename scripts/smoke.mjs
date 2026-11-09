@@ -111,7 +111,8 @@ async function main() {
   const post = await call("x_create_post", { text: "これは実行されてはいけない投稿", dryRun: false });
   check("x_create_post(dryRun:false) blocked by gate", post.isError === true, (post.json?.error ?? "").slice(0, 40));
 
-  // 8. browser_screenshot(隠しウィンドウでのキャプチャ)
+  // 8. browser_screenshot(表示ウィンドウでのキャプチャ。初回描画を待つため少し待機)
+  await new Promise((r) => setTimeout(r, 2500));
   const shot = await call("browser_screenshot", {});
   check(
     "browser_screenshot returns path",

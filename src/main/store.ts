@@ -25,6 +25,25 @@ function localDateKey(d: Date): string {
   return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
 }
 
+/**
+ * X の重み付き文字数(twitter-text v3 設定の簡易版)。
+ * 既定の重みは 2、コードポイント 0x0000-0x10FF / 0x2000-0x200D / 0x2020-0x202F / 0x2032-0x2037 は 1。
+ * 日本語等マルチバイトは 2 カウント(実質約 140 字が上限)。
+ * ※ URL の t.co 換算(23 字固定)は未対応で実文字数の概算(M2 で正確化)。過大評価側に倒れるため安全。
+ */
+export function weightedLength(text: string): number {
+  const weight1 = (code: number) =>
+    code <= 0x10ff ||
+    (code >= 0x2000 && code <= 0x200d) ||
+    (code >= 0x2020 && code <= 0x202f) ||
+    (code >= 0x2032 && code <= 0x2037);
+  let total = 0;
+  for (const ch of text) {
+    total += weight1(ch.codePointAt(0) ?? 0) ? 1 : 2;
+  }
+  return total;
+}
+
 export class Store {
   private readonly file: string;
   private data: StoreData;
@@ -100,9 +119,10 @@ export class Store {
   }): Draft {
     const text = (input.text ?? "").trim();
     if (!text) throw new Error("本文が空です");
-    if (text.length > MAX_TWEET_LEN) {
+    const w = weightedLength(text);
+    if (w > MAX_TWEET_LEN) {
       throw new Error(
-        "本文が " + text.length + " 文字です(X の上限は " + MAX_TWEET_LEN + " 文字)。短くしてください",
+        "本文の重み付き文字数が " + w + " です(X の上限は " + MAX_TWEET_LEN + "。日本語等マルチバイトは 2 カウント)。短くしてください",
       );
     }
     const now = new Date().toISOString();

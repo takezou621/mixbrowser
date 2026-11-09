@@ -181,18 +181,28 @@ export class XDriver {
 
   async screenshot(label: string): Promise<string> {
     fs.mkdirSync(this.screenshotDir, { recursive: true });
-    // ウィンドウの初回描画前やページ遷移直後は capturePage が失敗することがあるためリトライする
+    const file = path.join(this.screenshotDir, label + "-" + Date.now() + ".png");
+    // 1) capturePage(初回描画前やページ遷移直後は失敗することがあるためリトライ)
     let lastErr: unknown;
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 3; i++) {
       try {
         const image = await this.wc().capturePage(undefined, { stayHidden: true, stayAwake: true });
-        const file = path.join(this.screenshotDir, label + "-" + Date.now() + ".png");
         fs.writeFileSync(file, image.toPNG());
         return file;
       } catch (e) {
         lastErr = e;
-        await this.sleep(800);
+        await this.sleep(500);
       }
+    }
+    // 2) CDP Page.captureScreenshot(ウィンドウの表示状態に依存せずフレームを取得できる)
+    try {
+      const res = (await this.dbg("Page.captureScreenshot", { format: "png" })) as { data?: string };
+      if (res?.data) {
+        fs.writeFileSync(file, Buffer.from(res.data, "base64"));
+        return file;
+      }
+    } catch (e) {
+      lastErr = e;
     }
     throw new XDriverError(
       "capture_failed",

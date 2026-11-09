@@ -133,8 +133,21 @@ export class Engine {
 
   private async tick(): Promise<void> {
     const now = Date.now();
+    // アプリ停止/スリープで時刻を過ぎた予約の扱い(spec FR-4.2):
+    // 24 時間以内の超過分は順次実行、超過分は failed(期限超過)として再承認を要求する
+    const EXPIRE_MS = 24 * 3600_000;
     const due = this.store.listDrafts("scheduled").filter((d) => d.scheduledAt && new Date(d.scheduledAt).getTime() <= now);
     for (const d of due) {
+      const over = now - new Date(d.scheduledAt as string).getTime();
+      if (over > EXPIRE_MS) {
+        this.store.updateDraft(d.id, {
+          status: "failed",
+          error: "予約時刻を 24 時間以上過ぎたため自動実行を取りやめました(期限超過)。再承認してください",
+        });
+        this.store.addLog({ kind: "schedule_expire", level: "warn", message: "予約が期限超過(24時間超過)のため実行を取りやめ", draftId: d.id });
+        this.notify();
+        continue;
+      }
       await this.runDraft(d.id);
     }
   }

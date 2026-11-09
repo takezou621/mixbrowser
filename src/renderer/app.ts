@@ -170,13 +170,15 @@ function draftCard(d: Draft): HTMLElement {
 
   const meta = el("div", "meta");
   if (d.scheduledAt && d.status === "scheduled") meta.appendChild(el("div", undefined, "予約: " + fmtTime(d.scheduledAt)));
-  if (d.postUrl) {
+  if (d.postUrl && d.postUrl.startsWith("https://")) {
     const a = document.createElement("a");
     a.href = d.postUrl;
     a.textContent = d.postUrl;
     a.target = "_blank";
     meta.appendChild(el("div", undefined, "投稿URL: "));
     meta.appendChild(a);
+  } else if (d.postUrl) {
+    meta.appendChild(el("div", undefined, "投稿URL: " + d.postUrl));
   }
   if (d.error) meta.appendChild(el("div", undefined, "エラー: " + d.error));
   card.appendChild(meta);
@@ -194,8 +196,10 @@ function draftCard(d: Draft): HTMLElement {
     const dt = document.createElement("input");
     dt.type = "datetime-local";
     if (!schedInputs[d.id]) {
-      const def = new Date(Date.now() + 3600_000);
-      schedInputs[d.id] = localInputValue(def);
+      // エージェントが schedule_create で提案した時刻があれば初期値に使う
+      schedInputs[d.id] = d.scheduledAt
+        ? localInputValue(new Date(d.scheduledAt))
+        : localInputValue(new Date(Date.now() + 3600_000));
     }
     dt.value = schedInputs[d.id];
     dt.addEventListener("input", () => {

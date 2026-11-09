@@ -27,6 +27,7 @@ export type XErrorKind =
   | "selector_missing"
   | "timeout"
   | "post_failed"
+  | "capture_failed"
   | "navigation_failed";
 
 export class XDriverError extends Error {
@@ -180,28 +181,47 @@ export class XDriver {
 
   async screenshot(label: string): Promise<string> {
     fs.mkdirSync(this.screenshotDir, { recursive: true });
-    const image = await this.wc().capturePage(undefined, { stayHidden: true, stayAwake: true });
-    const file = path.join(this.screenshotDir, label + "-" + Date.now() + ".png");
-    fs.writeFileSync(file, image.toPNG());
-    return file;
+    // ウィンドウの初回描画前やページ遷移直後は capturePage が失敗することがあるためリトライする
+    let lastErr: unknown;
+    for (let i = 0; i < 4; i++) {
+      try {
+        const image = await this.wc().capturePage(undefined, { stayHidden: true, stayAwake: true });
+        const file = path.join(this.screenshotDir, label + "-" + Date.now() + ".png");
+        fs.writeFileSync(file, image.toPNG());
+        return file;
+      } catch (e) {
+        lastErr = e;
+        await this.sleep(800);
+      }
+    }
+    throw new XDriverError(
+      "capture_failed",
+      "スクリーンショットに失敗: " + (lastErr instanceof Error ? lastErr.message : String(lastErr)),
+    );
   }
 
   /** ログイン状態の確認。ハンドルが取れれば返す */
   async isLoggedIn(): Promise<LoginStatus> {
     await this.navigate(HOME_URL);
-    await this.sleep(2000);
-    const url = this.wc().getURL();
-    if (url.includes("/i/flow/login") || url.includes("/login")) {
-      return { loggedIn: false };
-    }
-    return this.evalJs<LoginStatus>(
+    // SPA の描画を待ちながら、ログインリダイレクト / SideNav 出現を最大8秒ポーリングする
+    const code =
       "(() => { const nav = document.querySelector('" +
-        SEL.accountBtn +
-        "'); if (!nav) return { loggedIn: false };" +
-        " const href = nav.getAttribute('href') || '';" +
-        " const handle = href.startsWith('/') ? href.slice(1).split('/')[0] : null;" +
-        " return { loggedIn: true, handle: handle }; })()",
-    );
+      SEL.accountBtn +
+      "'); if (!nav) return null;" +
+      " const href = nav.getAttribute('href') || '';" +
+      " const handle = href.startsWith('/') ? href.slice(1).split('/')[0] : null;" +
+      " return { loggedIn: true, handle: handle }; })()";
+    const deadline = Date.now() + 8000;
+    for (;;) {
+      await this.sleep(600);
+      const url = this.wc().getURL();
+      if (url.includes("/i/flow/login") || url.includes("/login")) {
+        return { loggedIn: false };
+      }
+      const res = await this.evalJs<LoginStatus | null>(code);
+      if (res && res.loggedIn) return res;
+      if (Date.now() >= deadline) return { loggedIn: false };
+    }
   }
 
   private async assertLoggedIn(): Promise<string> {
@@ -287,6 +307,10 @@ export class XDriver {
   /** 投稿を実行し、投稿URLを検証して返す */
   async post(text: string): Promise<{ postUrl: string; screenshotPath: string }> {
     const handle = await this.assertLoggedIn();
+    if (!handle) {
+      // ハンドル未取得のまま投稿すると、URL検証がタイムライン上の他人の投稿と誤一致する恐れがある
+      throw new XDriverError("post_failed", "アカウントのハンドルを取得できませんでした。一度「ログイン確認」を実行してください");
+    }
     await this.openCompose();
     await this.clickSelector(SEL.textarea, 8000);
     await this.typeText(text);

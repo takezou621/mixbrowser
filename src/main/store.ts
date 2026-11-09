@@ -20,6 +20,11 @@ const DEFAULT_SETTINGS: Settings = {
 
 const MAX_LOGS = 500;
 
+function localDateKey(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+}
+
 export class Store {
   private readonly file: string;
   private data: StoreData;
@@ -146,12 +151,12 @@ export class Store {
 
   /** 本日(ローカル日付)の posted 件数 */
   postedTodayCount(accountId: string): number {
-    const t = new Date();
-    const key =
-      t.getFullYear() + "-" + String(t.getMonth() + 1).padStart(2, "0") + "-" + String(t.getDate()).padStart(2, "0");
-    return this.data.drafts.filter(
-      (d) => d.accountId === accountId && d.status === "posted" && (d.postedAt ?? "").slice(0, 10) === key,
-    ).length;
+    const key = localDateKey(new Date());
+    return this.data.drafts.filter((d) => {
+      if (d.accountId !== accountId || d.status !== "posted" || !d.postedAt) return false;
+      // postedAt(UTC ISO)をローカル日付へ変換して比較(UTC日付のslice比較は深夜帯にずれる)
+      return localDateKey(new Date(d.postedAt)) === key;
+    }).length;
   }
 
   lastPostedAt(accountId: string): Date | undefined {

@@ -325,8 +325,9 @@ export async function startMcpServer(deps: McpDeps): Promise<McpHandle> {
       mixbrowser: { type: "http", url, headers: { Authorization: "Bearer " + token } },
     },
   };
-  fs.writeFileSync(configPath, JSON.stringify(mcpConfig, null, 2), "utf8");
-  fs.writeFileSync(endpointPath, JSON.stringify({ url, token, pid: process.pid }, null, 2), "utf8");
+  // トークン入りのファイルは所有者のみ読める権限で書き出す
+  fs.writeFileSync(configPath, JSON.stringify(mcpConfig, null, 2), { encoding: "utf8", mode: 0o600 });
+  fs.writeFileSync(endpointPath, JSON.stringify({ url, token, pid: process.pid }, null, 2), { encoding: "utf8", mode: 0o600 });
 
   return {
     url,

@@ -172,7 +172,9 @@ function registerIpc(): void {
 
   handleIpc("ui:openPath", (args): OkErr => {
     const p = String(args[0] ?? "");
-    if (!p.startsWith(path.join(app.getPath("userData"), "screenshots"))) {
+    // 姉妹ディレクトリ(screenshots-* 等)への prefix 漏れを防ぐため、sep まで含めて比較
+    const shotDir = path.join(app.getPath("userData"), "screenshots") + path.sep;
+    if (!p.startsWith(shotDir)) {
       throw new Error("許可されていないパスです");
     }
     void shell.openPath(p);

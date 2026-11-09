@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:;" />
+    <title>mixbrowser</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="root">
+      <aside id="sidebar">
+        <div class="logo">mixbrowser</div>
+        <div id="account"></div>
+        <div class="side-title">アクションログ</div>
+        <div id="logs"></div>
+      </aside>
+      <main id="center">
+        <div id="topbar">
+          <button id="btn-home">Home</button>
+          <button id="btn-reload">再読み込み</button>
+          <button id="btn-login">ログイン確認</button>
+          <span id="login-msg"></span>
+        </div>
+        <div id="viewport"></div>
+      </main>
+      <section id="panel">
+        <div id="tabs">
+          <button id="tab-ai" class="tab active">AIエージェント</button>
+          <button id="tab-queue" class="tab">投稿キュー</button>
+        </div>
+        <div id="panel-body"></div>
+      </section>
+    </div>
+    <script src="./renderer.js"></script>
+  </body>
+</html>

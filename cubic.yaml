@@ -1,0 +1,107 @@
+# yaml-language-server: $schema=https://cubic.dev/schema/cubic-repository-config.schema.json
+# mixbrowser - cubic AI review 設定
+# スキーマ詳細: https://docs.cubic.dev/configure/cubic-yaml
+# ※ cubic はデフォルトブランチ(main)のこのファイルのみを読む(feature branches は対象外)
+
+version: 1
+
+reviews:
+  enabled: true
+  # 本リポジトリは公開 + 承認ゲートを中核とする性質上、拾い上げは高めに設定
+  sensitivity: high
+  incremental_commits: true
+  check_drafts: false
+  architecture_diagrams: false
+  # 公開リポジトリのため外部コントリビュータの PR は手動トリガまで自動レビューしない
+  external_contributors_require_manual_review: true
+  resolve_threads_when_addressed: true
+
+  # 本プロジェクトの最重要不変条件は「承認ゲート経由でのみ投稿が実行される」(docs/spec.md FR-5)。
+  # 人間の承認哲学に合わせ、自動承認は一切使用しない
+  auto_approve_behavior: disabled
+  auto_approve: disabled
+
+  # ultrareview は手動トリガのみ。自動化する場合は automatic に変更し
+  # auto_ultrareview_file_patterns で src/main/** 等を指定する
+  ultrareview: manual
+
+  custom_instructions: |
+    このリポジトリは「AI 連携専用ブラウザ mixbrowser」(Electron + CDP で x.com を操作し、
+    X 公式 API を使わずブラウザ操作で投稿を行う)。レビュー時は docs/spec.md(製品仕様)、
+    docs/architecture.md(アーキテクチャ)、docs/roadmap.md(マイルストーンとオープン課題)を文脈として参照すること。
+    特に以下を最優先でチェック:
+    1. 承認ゲート(FR-5): MCP/エージェント経路から投稿を実行できないこと。x_create_post のドライラン固定の解除は禁止。
+    2. 安全設定(FR-4.3): 日次上限・最小間隔・実行時間帯のチェックを迂回する変更がないこと。
+    3. X 利用規約リスク: headless 化、実キー入力以外の DOM 直接書き換え、入力間隔の固定化/短縮、大量操作の追加など bot 検知リスクを上げる変更。
+    4. セレクタは src/main/xdriver.ts の SEL レジストリに集約すること(x.com の data-testid 等の散在を禁止)。
+    5. 秘密情報(cookie/セッショントークン/API キー)のコミット、ログ出力、平文保存の追加がないこと。
+    レビューコメントは日本語で書くこと。
+
+  ignore:
+    files:
+      - dist/**
+      - coverage/**
+
+  custom_rules:
+    - name: 承認ゲートの不変条件を維持
+      description: |
+        MCP ツールやエージェント経路から投稿を実行できるコードを検出したら指摘する。
+        x_create_post は常にドライラン(実行不可)であり、実際の送信は UI 承認(approveNow / 予約承認)
+        を経由した Engine の実行経路のみ許容される(docs/spec.md FR-5)。
+        ゲートのバイパス、dryRun 既定の緩和、承認を設定で回避できるようにする変更は blocker。
+      include:
+        - src/main/mcpserver.ts
+        - src/main/engine.ts
+        - src/main/index.ts
+        - src/shared/types.ts
+
+    - name: X 操作の規約・bot 検知リスク
+      description: |
+        XDriver の変更について、headless 実行、実キー入力(Input.dispatchKeyEvent / Input.insertText)
+        以外の DOM 直接書き換え、入力間隔の固定化・短縮、自動操作の並列化など、
+        bot 検知リスクや X 利用規約上のリスクを上げる変更を指摘する。
+        セレクタを変更する場合は src/main/xdriver.ts の SEL レジストリのみを更新しているか確認する。
+      include:
+        - src/main/xdriver.ts
+
+    - name: MCP サーバの認可を弱めない
+      description: |
+        BrowserToolServer(MCP)は 127.0.0.1 限定 + Bearer 認証が前提(docs/architecture.md §2, §7)。
+        0.0.0.0 等へのバインド変更、認証スキップ、トークンの平文ログ出力、
+        ツール権限(allowedTools / リスクレベル)の緩和を検出したら指摘する。
+      include:
+        - src/main/mcpserver.ts
+        - src/main/agents.ts
+
+    - name: 秘密情報の取り扱い
+      description: |
+        セッション cookie、トークン、API キーをリポジトリへコミットしたり、
+        ログやスクリーンショット経由で流出させる変更を指摘する。
+        保存は OS キーチェーン路線(NFR-1)に沿うこと。トークン入りのファイル(endpoint.json /
+        mixbrowser.mcp.json 等)は mode 0600 で書き出す現状の実装を維持する。
+      include:
+        - src/**
+        - scripts/**
+
+    - name: 仕様ドキュメントとの整合
+      description: |
+        docs/ 配下の変更は docs/spec.md の FR/NFR 番号、docs/roadmap.md の M/Q 番号との整合を確認する。
+        参照切れや受け入れ条件との矛盾がないか。実装変更が仕様の意味を変える場合は docs 側の更新を要求する。
+      file_paths:
+        - docs/spec.md
+        - docs/architecture.md
+        - docs/roadmap.md
+
+pr_descriptions:
+  generate: true
+  instructions: |
+    概要は日本語で書く。変更が docs/spec.md のどの FR/NFR に対応するかを明示し、
+    関連するロードマップ項目(M1〜M3 / Q1〜Q7)があれば言及する。
+    検証結果(npm run typecheck / npm run smoke の結果)を必ず含める。
+
+issues:
+  fix_with_cubic_buttons: true
+  pr_comment_fixes: true
+  coding_agent_provider: cubic
+  # 自動修正はオフ(承認ゲート哲学に合わせ、人は常にループ内に置く)
+  auto_fix: off

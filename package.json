@@ -4,6 +4,9 @@
   "description": "AI連携専用ブラウザ mixbrowser (MVP / M1)",
   "main": "dist/main.js",
   "private": true,
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",

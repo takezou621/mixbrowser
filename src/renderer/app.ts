@@ -15,7 +15,23 @@ let queueFilter = "ALL";
 let agentRunning = false;
 let lastAgentText = "";
 let promptText = "";
+let manualDraftText = "";
 const schedInputs: Record<string, string> = {};
+/** ユーザーが datetime-local を手動編集したか(未編集ならエージェント提案時刻へ同期する) */
+const schedTouched: Record<string, boolean> = {};
+
+/** 許可時間帯内の次のスロット(既定の予約初期値)をローカル入力形式で返す */
+function nextAllowedSlot(activeHours: { start: number; end: number }): string {
+  const d = new Date();
+  d.setMinutes(5, 0, 0);
+  if (d.getHours() < activeHours.start) {
+    d.setHours(activeHours.start);
+  } else if (d.getHours() >= activeHours.end) {
+    d.setDate(d.getDate() + 1);
+    d.setHours(activeHours.start);
+  }
+  return localInputValue(d);
+}
 
 const STATUS_LABEL: Record<string, string> = {
   draft: "下書き",
@@ -114,13 +130,14 @@ function renderAiTab(box: HTMLElement): void {
   ta.rows = 4;
   ta.placeholder = "例: 明日の朝7時に、Rustの学習メモについて投稿して";
   ta.value = promptText;
-  ta.addEventListener("input", () => {
-    promptText = ta.value;
-  });
-  box.appendChild(ta);
-
   const run = el("button", "primary", agentRunning ? "実行中… " : "エージェントを実行") as HTMLButtonElement;
   run.disabled = agentRunning || !promptText.trim();
+  ta.addEventListener("input", () => {
+    promptText = ta.value;
+    // 再描画を伴わずボタンの活性だけ更新する(フォーカス/入力を壊さない)
+    run.disabled = agentRunning || !promptText.trim();
+  });
+  box.appendChild(ta);
   run.addEventListener("click", () => {
     const prompt = promptText.trim();
     if (!prompt || agentRunning) return;
@@ -195,14 +212,18 @@ function draftCard(d: Draft): HTMLElement {
 
     const dt = document.createElement("input");
     dt.type = "datetime-local";
-    if (!schedInputs[d.id]) {
-      // エージェントが schedule_create で提案した時刻があれば初期値に使う
-      schedInputs[d.id] = d.scheduledAt
-        ? localInputValue(new Date(d.scheduledAt))
-        : localInputValue(new Date(Date.now() + 3600_000));
+    // ユーザーが編集済みならその値を優先し、未編集ならエージェントの提案時刻(scheduledAt)へ常に同期する。
+    // どちらも無い場合は許可時間帯内の次のスロットを初期値にする
+    if (!schedTouched[d.id]) {
+      if (d.scheduledAt) {
+        schedInputs[d.id] = localInputValue(new Date(d.scheduledAt));
+      } else if (!schedInputs[d.id] || !state) {
+        schedInputs[d.id] = nextAllowedSlot(state?.settings.activeHours ?? { start: 8, end: 23 });
+      }
     }
     dt.value = schedInputs[d.id];
     dt.addEventListener("input", () => {
+      schedTouched[d.id] = true;
       schedInputs[d.id] = dt.value;
     });
     actions.appendChild(dt);
@@ -236,7 +257,9 @@ function draftCard(d: Draft): HTMLElement {
     pv.addEventListener("click", openPreview);
     actions.appendChild(pv);
   }
-  if (d.status !== "posting") {
+  // 削除は canceled(終端)のみに限定。pending/scheduled/failed は却下・予約取消・再試行を経由させ、
+  // 承認済み/証跡(posted)を直接消して状態遷移を迂回できないようにする
+  if (d.status === "canceled") {
     const del = el("button", undefined, "削除");
     del.addEventListener("click", () => void act("削除", () => window.mix.deleteDraft(d.id)));
     actions.appendChild(del);
@@ -249,7 +272,8 @@ function renderQueueTab(box: HTMLElement): void {
   if (!state) return;
   const chips = el("div", "chips");
   for (const f of FILTERS) {
-    const c = el("div", "chip" + (queueFilter === f.key ? " active" : ""), f.label);
+    // キーボード操作可能な button 要素にする(div は focus/Enter 不可)
+    const c = el("button", "chip" + (queueFilter === f.key ? " active" : ""), f.label);
     c.addEventListener("click", () => {
       queueFilter = f.key;
       renderPanelBody();
@@ -263,12 +287,19 @@ function renderQueueTab(box: HTMLElement): void {
   const ta = el("textarea") as HTMLTextAreaElement;
   ta.rows = 2;
   ta.placeholder = "投稿本文(280字以内)";
-  const add = el("button", "primary", "承認待ちに追加");
+  // 入力中の本文をモジュール状態に保持し、再描画で消えないようにする
+  ta.value = manualDraftText;
+  ta.addEventListener("input", () => {
+    manualDraftText = ta.value;
+  });
+  const add = el("button", "primary", "承認待ちに追加") as HTMLButtonElement;
+  add.disabled = !manualDraftText.trim();
   add.addEventListener("click", () => {
     const t = ta.value;
     if (!t.trim()) return;
     void act("追加", () => window.mix.createManualDraft(t)).then(() => {
-      ta.value = "";
+      manualDraftText = "";
+      renderPanelBody();
     });
   });
   manual.appendChild(ta);

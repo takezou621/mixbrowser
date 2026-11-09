@@ -8,7 +8,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod";
 import type { WebContentsView } from "electron";
 import type { DraftStatus } from "../shared/types";
-import { Store } from "./store";
+import { Store, weightedLength, MAX_TWEET_LEN } from "./store";
 import { Engine } from "./engine";
 import { XDriver } from "./xdriver";
 
@@ -83,7 +83,8 @@ export async function startMcpServer(deps: McpDeps): Promise<McpHandle> {
     },
     async () => {
       try {
-        const st = await driver().isLoggedIn();
+        // /home へ遷移するため Engine の直列キューで排他する(投稿実行中の遷移を防ぐ)
+        const st = await deps.engine.runExclusive(() => driver().isLoggedIn());
         if (st.loggedIn && st.handle) deps.store.setAccountHandle(account(), st.handle);
         return json({ ok: true, ...st });
       } catch (e) {
@@ -105,7 +106,17 @@ export async function startMcpServer(deps: McpDeps): Promise<McpHandle> {
     },
     async ({ text, screenshotPath }) => {
       try {
-        const d = deps.store.createDraft({ accountId: account(), text, source: "agent", screenshotPath });
+        // screenshotPath は screenshots ディレクトリ配下の実在 PNG に限定する(UI のプレビュー経由で
+        // screenshots 外のファイルを開かれることを防ぐ)。条件外は静かに無視
+        let safeShot: string | undefined;
+        if (screenshotPath) {
+          const resolved = path.resolve(screenshotPath);
+          const dir = path.resolve(deps.screenshotDir) + path.sep;
+          if (resolved.startsWith(dir) && resolved.endsWith(".png") && fs.existsSync(resolved)) {
+            safeShot = resolved;
+          }
+        }
+        const d = deps.store.createDraft({ accountId: account(), text, source: "agent", screenshotPath: safeShot });
         deps.notify();
         deps.store.addLog({ kind: "draft", level: "info", message: "エージェントが下書きを作成", draftId: d.id });
         return json({ ok: true, draftId: d.id, status: d.status, text: d.text, note: GATE_NOTE });
@@ -162,12 +173,18 @@ export async function startMcpServer(deps: McpDeps): Promise<McpHandle> {
         if (d.status !== "pending_approval") {
           return fail("予約設定できるのは承認待ちドラフトのみです(現在: " + d.status + ")");
         }
-        deps.store.updateDraft(draftId, { scheduledAt: new Date(runAt).toISOString() });
+        const when = new Date(runAt);
+        if (isNaN(when.getTime())) return fail("日時の形式が不正です: " + runAt);
+        if (when.getTime() < Date.now() - 60_000) return fail("過去の日時は指定できません");
+        // Engine と同じ安全設定チェックを行い、UI 承認時に必ず失敗するような予約を事前に弾く
+        const check = deps.engine.safetyCheck(account(), when);
+        if (!check.ok) return fail("安全設定に違反しています: " + check.reason);
+        deps.store.updateDraft(draftId, { scheduledAt: when.toISOString() });
         deps.notify();
         return json({
           ok: true,
           draftId,
-          scheduledAt: new Date(runAt).toISOString(),
+          scheduledAt: when.toISOString(),
           note: "予約時刻を設定しました。UI で「予約承認」されると確定します。" + GATE_NOTE,
         });
       } catch (e) {
@@ -211,7 +228,13 @@ export async function startMcpServer(deps: McpDeps): Promise<McpHandle> {
             "M1 の承認ゲート(FR-5)により、MCP からの投稿実行はできません。draft_save で下書きを登録し、ユーザーが UI で承認してください",
           );
         }
-        const res = await driver().dryRunCompose(text);
+        // ドライランでも X のコンポーザに入力するため、draft_save と同じ重み付き文字数検証を行う
+        const w = weightedLength(text);
+        if (w > MAX_TWEET_LEN) {
+          return fail("本文の重み付き文字数が " + w + " です(上限 " + MAX_TWEET_LEN + "。日本語等は 2 カウント)。短くしてください");
+        }
+        // ブラウザ操作は Engine の直列キューで排他し、承認済み投稿(runDraft)の実行と衝突させない
+        const res = await deps.engine.runExclusive(() => driver().dryRunCompose(text));
         deps.store.addLog({ kind: "dry_run", level: "info", message: "ドライラン実行", screenshotPath: res.screenshotPath });
         deps.notify();
         const png = fs.readFileSync(res.screenshotPath);
@@ -326,8 +349,12 @@ export async function startMcpServer(deps: McpDeps): Promise<McpHandle> {
     },
   };
   // トークン入りのファイルは所有者のみ読める権限で書き出す
+  // トークン入りのファイルは所有者のみ読める権限で書き出す。
+  // 既存ファイルがある場合 mode 指定は効かないため、chmod で明示的に権限を落とす
   fs.writeFileSync(configPath, JSON.stringify(mcpConfig, null, 2), { encoding: "utf8", mode: 0o600 });
   fs.writeFileSync(endpointPath, JSON.stringify({ url, token, pid: process.pid }, null, 2), { encoding: "utf8", mode: 0o600 });
+  fs.chmodSync(configPath, 0o600);
+  fs.chmodSync(endpointPath, 0o600);
 
   return {
     url,

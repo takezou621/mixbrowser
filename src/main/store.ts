@@ -87,6 +87,12 @@ export class Store {
     return this.file;
   }
 
+  /** 設定の部分的な上書き(スモークテストで時間帯制約を緩める等に使用) */
+  setSettings(patch: Partial<Settings>): void {
+    this.data.settings = { ...this.data.settings, ...patch };
+    this.save();
+  }
+
   get settings(): Settings {
     return { ...this.data.settings };
   }
@@ -169,14 +175,19 @@ export class Store {
     return status ? all.filter((d) => d.status === status) : all;
   }
 
-  /** 本日(ローカル日付)の posted 件数 */
-  postedTodayCount(accountId: string): number {
-    const key = localDateKey(new Date());
+  /** 指定日(ローカル日付、既定は今日)の posted 件数 */
+  postedCountOn(accountId: string, day: Date = new Date()): number {
+    const key = localDateKey(day);
     return this.data.drafts.filter((d) => {
       if (d.accountId !== accountId || d.status !== "posted" || !d.postedAt) return false;
       // postedAt(UTC ISO)をローカル日付へ変換して比較(UTC日付のslice比較は深夜帯にずれる)
       return localDateKey(new Date(d.postedAt)) === key;
     }).length;
+  }
+
+  /** 本日(ローカル日付)の posted 件数 */
+  postedTodayCount(accountId: string): number {
+    return this.postedCountOn(accountId, new Date());
   }
 
   lastPostedAt(accountId: string): Date | undefined {

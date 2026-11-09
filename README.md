@@ -11,7 +11,7 @@ X とは公式 API を使わず、**ブラウザ操作**で連携します。Cla
 
 ## MVP(M1)の実装
 
-`npm start` で起動します(要: Node.js 20+、[Claude Code CLI](https://docs.anthropic.com/ja/docs/claude-code)(AI パネル利用時))。
+`npm start` で起動します(要: Node.js 22.12+(Electron 45 の要件)、[Claude Code CLI](https://docs.anthropic.com/ja/docs/claude-code)(AI パネル利用時))。
 
 ```bash
 npm install

@@ -20,6 +20,18 @@ export function resolveClaudePath(): string | null {
       /* 次の候補へ */
     }
   }
+  // PATH 上の各ディレクトリも探索する(GUI 起動時は PATH が貧弱でも、ターミナルと同じ PATH に
+  // claude が存在するケースを拾う。ただし Electron の既定 PATH は狭いので標準配置を先に見る)
+  const pathDirs = (process.env["PATH"] ?? "").split(path.delimiter).filter(Boolean);
+  for (const dir of pathDirs) {
+    const c = path.join(dir, "claude");
+    try {
+      fs.accessSync(c, fs.constants.X_OK);
+      return c;
+    } catch {
+      /* 次の候補へ */
+    }
+  }
   return null;
 }
 
@@ -68,7 +80,11 @@ export async function runAgentTask(opts: {
   ];
 
   return new Promise<AgentResult>((resolve) => {
-    const child = spawn(opts.claudePath, args, { stdio: ["ignore", "pipe", "pipe"] });
+    // detached + プロセスグループ kill で、claude が内包する子プロセスも含めて終了させる(孤児プロセス防止)
+    const child = spawn(opts.claudePath, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
+    });
     let out = "";
     let errOut = "";
     let settled = false;
@@ -78,8 +94,20 @@ export async function runAgentTask(opts: {
         resolve(r);
       }
     };
+    const killTree = () => {
+      try {
+        if (child.pid && process.platform !== "win32") {
+          // 負の PID = プロセスグループ全体にシグナル(detached でグループリーダーになっている)
+          process.kill(-child.pid, "SIGKILL");
+        } else {
+          child.kill("SIGKILL");
+        }
+      } catch {
+        /* すでに終了している */
+      }
+    };
     const timer = setTimeout(() => {
-      child.kill("SIGKILL");
+      killTree();
       done({ ok: false, error: "タイムアウト: claude が " + ((opts.timeoutMs ?? 240_000) / 1000) + "秒以内に完了しませんでした" });
     }, opts.timeoutMs ?? 240_000);
 
@@ -118,7 +146,8 @@ export async function runAgentTask(opts: {
         });
         return;
       }
-      const isError = Boolean(parsed["is_error"]);
+      // is_error 無しでも非ゼロ終了コードは失敗扱い(認証失敗やツール拒否を実行完了と誤記録しない)
+      const isError = Boolean(parsed["is_error"]) || (typeof code === "number" && code !== 0);
       done({
         ok: !isError,
         result: typeof parsed["result"] === "string" ? parsed["result"] : undefined,

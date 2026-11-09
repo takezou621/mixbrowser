@@ -36,6 +36,23 @@ export class Engine {
     return next;
   }
 
+  /** 同一ドラフトのスキップ warn ログ抑制用(60 秒に 1 回まで) */
+  private lastSkipLogAt = new Map<string, number>();
+
+  /**
+   * 直列キューで排他実行する。
+   * MCP のブラウザ操作ツール(x_check_login / x_create_post のドライラン等)もこれを経由し、
+   * 承認済み投稿(runDraft)の操作と同一 WebContents 上で衝突しないようにする。
+   */
+  runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(fn);
+    this.queue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
   /** 連投抑制チェック(docs/spec.md FR-4.3) */
   safetyCheck(accountId: string, when: Date = new Date()): { ok: true } | { ok: false; reason: string } {
     const s = this.store.settings;
@@ -46,8 +63,9 @@ export class Engine {
         reason: "実行許可時間帯外です(許可: " + s.activeHours.start + "時〜" + s.activeHours.end + "時)",
       };
     }
-    const postedToday = this.store.postedTodayCount(accountId);
-    if (postedToday >= s.dailyPostLimit) {
+    // 日次上限は『実行(予約)日付』基準で数える(今日の枠が満杯でも明日の予約は受け付ける)
+    const postedOnDay = this.store.postedCountOn(accountId, when);
+    if (postedOnDay >= s.dailyPostLimit) {
       return { ok: false, reason: "日次投稿上限に達しています(上限: " + s.dailyPostLimit + "件/日)" };
     }
     const last = this.store.lastPostedAt(accountId);
@@ -157,14 +175,21 @@ export class Engine {
     await this.enqueue(async () => {
       const d = this.store.getDraft(draftId);
       if (!d || d.status !== "scheduled" || !d.scheduledAt) return;
-      const check = this.safetyCheck(d.accountId, new Date(d.scheduledAt));
+      // 再チェックは『実際の実行時刻』で行う(停止/スリープ復帰で予約時刻からずれるため)。予約時刻自体は scheduleAt で検証済み
+      const check = this.safetyCheck(d.accountId);
       if (!check.ok) {
-        this.store.addLog({
-          kind: "post_skip",
-          level: "warn",
-          message: "安全設定により実行をスキップ: " + check.reason,
-          draftId,
-        });
+        // スキップは 30 秒ごとの tick で繰り返し得るため、同一ドラフトの warn ログは 60 秒に 1 回へ抑制
+        const nowMs = Date.now();
+        const last = this.lastSkipLogAt.get(draftId) ?? 0;
+        if (nowMs - last > 60_000) {
+          this.lastSkipLogAt.set(draftId, nowMs);
+          this.store.addLog({
+            kind: "post_skip",
+            level: "warn",
+            message: "安全設定により実行を見送り(予約は維持、条件が空き次第自動実行): " + check.reason,
+            draftId,
+          });
+        }
         this.notify();
         return;
       }

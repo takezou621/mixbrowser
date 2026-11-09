@@ -159,8 +159,12 @@ export class XDriver {
       } else {
         await this.dbg("Input.insertText", { text: ch });
       }
-      // 人間らしい入力間隔(ジッタ)
-      await this.sleep(35 + Math.floor(Math.random() * 80));
+      // 人間らしい入力間隔: 大半は 40〜140ms、約 8% は長いポーズ(250〜650ms)を挿入し等間隔性を崩す
+      if (Math.random() < 0.08) {
+        await this.sleep(250 + Math.floor(Math.random() * 400));
+      } else {
+        await this.sleep(40 + Math.floor(Math.random() * 100));
+      }
     }
   }
 
@@ -293,13 +297,20 @@ export class XDriver {
     }
   }
 
-  private async findLatestPostUrl(handle: string): Promise<string> {
+  private async findLatestPostUrl(handle: string, text: string): Promise<string> {
     await this.navigate("https://x.com/" + handle);
     await this.sleep(2500);
+    // プロフィール上の記事から、投稿本文の冒頭(空白正規化・先頭30字)が一致するものだけを採用する。
+    // 無条件に最初のリンクを返すと、既存投稿の URL を成功結果として誤記録する恐れがある
+    const needle = text.replace(/\s+/g, " ").trim().slice(0, 30);
     const code =
-      "(() => { const a = document.querySelector('" +
-      SEL.tweetLink +
-      "'); return a ? a.getAttribute('href') : null; })()";
+      "(() => { const needle = " +
+      JSON.stringify(needle) +
+      "; const arts = document.querySelectorAll('article[data-testid=\"tweet\"]');" +
+      " for (const a of arts) { const link = a.querySelector('a[href*=\"/status/\"]');" +
+      " if (!link) continue; const t = (a.textContent || '').replace(/[\\s\\u2000-\\u200f]+/g, ' ');" +
+      " if (t.indexOf(needle) >= 0) return link.getAttribute('href'); }" +
+      " return null; })()";
     for (let i = 0; i < 5; i++) {
       const href = await this.evalJs<string | null>(code);
       if (href) {
@@ -311,7 +322,10 @@ export class XDriver {
       }
       await this.sleep(1500);
     }
-    throw new XDriverError("post_failed", "投稿後の URL を確認できませんでした(プロフィールに表示されていない可能性)");
+    throw new XDriverError(
+      "post_failed",
+      "投稿後の URL を確認できませんでした(本文が一致する投稿がプロフィールに見つかりません)。手動でプロフィールを確認してください",
+    );
   }
 
   /** 投稿を実行し、投稿URLを検証して返す */
@@ -333,7 +347,7 @@ export class XDriver {
       throw new XDriverError("post_failed", "投稿が完了しませんでした" + (toast ? "( " + toast + " )" : ""));
     }
     await this.sleep(2000);
-    const postUrl = await this.findLatestPostUrl(handle);
+    const postUrl = await this.findLatestPostUrl(handle, text);
     return { postUrl, screenshotPath: shotBefore };
   }
 }

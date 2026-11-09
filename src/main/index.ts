@@ -48,6 +48,7 @@ function createWindow(): void {
   win = new BrowserWindow({
     width: isSmoke ? 400 : 1400,
     height: isSmoke ? 300 : 900,
+    ...(isSmoke ? {} : { minWidth: 900, minHeight: 600 }),
     show: !isSmoke,
     title: "mixbrowser",
     webPreferences: {
@@ -72,6 +73,14 @@ function createWindow(): void {
     },
   });
   win.contentView.addChildView(view);
+  // window.open / target=_blank による未管理ウィンドウ(親と同じ webPreferences・パーティションを継承)を防ぐ。
+  // x.com 配下の URL なら同一ビュー内で遷移させ、それ以外は拒否する
+  view.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https:\/\/(x|twitter)\.com\//.test(url)) {
+      void view?.webContents.loadURL(url);
+    }
+    return { action: "deny" };
+  });
   layout();
   void view.webContents.loadURL(isSmoke ? "about:blank" : HOME_URL);
   if (isSmoke) {
@@ -148,12 +157,17 @@ function registerIpc(): void {
     return { ok: true };
   });
 
-  handleIpc("ui:checkLogin", async (): Promise<LoginStatus & OkErr> => {
+  ipcMain.handle("ui:checkLogin", async (): Promise<LoginStatus & OkErr> => {
     const driver = new XDriver(() => view ?? undefined, screenshotDir());
-    const st = await driver.isLoggedIn();
-    if (st.loggedIn && st.handle) store.setAccountHandle("main", st.handle);
-    notify();
-    return { ok: true, ...st };
+    try {
+      const st = await driver.isLoggedIn();
+      if (st.loggedIn && st.handle) store.setAccountHandle("main", st.handle);
+      notify();
+      return { ok: true, loggedIn: st.loggedIn, handle: st.handle ?? null };
+    } catch (e) {
+      // 失敗時も loggedIn を必ず返す(型の契約を守り、呼び出し側の誤解を防ぐ)
+      return { ok: false, loggedIn: false, error: e instanceof Error ? e.message : String(e) };
+    }
   });
 
   handleIpc("ui:navigate", (args): OkErr => {
@@ -171,13 +185,13 @@ function registerIpc(): void {
   });
 
   handleIpc("ui:openPath", (args): OkErr => {
-    const p = String(args[0] ?? "");
-    // 姉妹ディレクトリ(screenshots-* 等)への prefix 漏れを防ぐため、sep まで含めて比較
+    // path.resolve で .. を正規化してから screenshots 配下であることを検査する
+    const resolved = path.resolve(String(args[0] ?? ""));
     const shotDir = path.join(app.getPath("userData"), "screenshots") + path.sep;
-    if (!p.startsWith(shotDir)) {
+    if (!resolved.startsWith(shotDir)) {
       throw new Error("許可されていないパスです");
     }
-    void shell.openPath(p);
+    void shell.openPath(resolved);
     return { ok: true };
   });
 }
@@ -186,6 +200,10 @@ function registerIpc(): void {
 
 app.whenReady().then(async () => {
   store = new Store(app.getPath("userData"));
+  if (isSmoke) {
+    // スモークテストは時間帯非依存で動かす(実行時刻に関わらず安全設定チェックを通す)
+    store.setSettings({ activeHours: { start: 0, end: 24 } });
+  }
   // 前回終了時に実行中だったドラフトの救済(spec FR-4.4):
   // X への送信結果は不明のため自動再送はしない(二重投稿防止)。ユーザー確認後に再承認する
   for (const d of store.listDrafts("posting")) {
